@@ -11,6 +11,7 @@ dist-ssr/
 # Server data — only track files metadata, not user data
 server/data/users.json
 server/data/submissions.json
+server/uploads/
 
 # IDE
 .vscode/
