@@ -8,9 +8,9 @@ dist-ssr/
 .env.local
 .env.*.local
 
-# Server data (contains user submissions, don't commit)
-server/data/
-server/uploads/
+# Server data — only track files metadata, not user data
+server/data/users.json
+server/data/submissions.json
 
 # IDE
 .vscode/
