@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -64,9 +66,16 @@ if (fs.existsSync(clientDist)) {
   });
 }
 
-// Verify SMTP connection on startup
+// Verify Cloudinary and SMTP configuration on startup
+const cloudinary = require('./config/cloudinary');
+if (process.env.CLOUDINARY_CLOUD_NAME) {
+  console.log(`☁️  Cloudinary configured: ${process.env.CLOUDINARY_CLOUD_NAME}`);
+} else {
+  console.warn('⚠️  Cloudinary not configured — file uploads will fail. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET');
+}
+
 verifyConnection().then(ok => {
-  if (!ok) console.warn('⚠️ 邮件功能不可用，请在 163 邮箱重新获取 SMTP 授权码');
+  if (!ok) console.warn('⚠️  邮件功能不可用，请在 163 邮箱重新获取 SMTP 授权码');
 });
 
 app.listen(PORT, () => {

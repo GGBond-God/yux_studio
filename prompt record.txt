@@ -142,3 +142,7 @@ A-Level要分pure math, further math, decision等等
 【预约联系】没有初一，初二的选项
 
 我租了一个域名，叫yux.org.cn。请你帮我把网站迁移到这个域名上。
+
+在netlify的deploy file browser里面，我发现关于dist和client的路径关系是：dist\client。这个是不是反了？请你检查问题并给我解决方案。
+
+我在本地上传的那些学习资料，在https://yux.org.cn都看不到，请问原因是什么，解决方法是什么

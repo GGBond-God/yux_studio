@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const cloudinary = require('../config/cloudinary');
 const { authenticateToken, requireAdmin } = require('../auth');
 
 const router = express.Router();
@@ -9,20 +10,9 @@ const dataDir = path.join(__dirname, '..', 'data');
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 const filesPath = path.join(dataDir, 'files.json');
 
-// Multer config
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const timestamp = Date.now();
-    const safeName = Buffer.from(file.originalname, 'latin1').toString('utf-8');
-    cb(null, `${timestamp}-${safeName}`);
-  }
-});
-
+// Multer config — use memory storage for Cloudinary uploads
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
 });
 
@@ -71,6 +61,12 @@ router.get('/:id/download', authenticateToken, (req, res) => {
     return res.status(403).json({ error: '你没有该分类的下载权限' });
   }
 
+  // Cloudinary file: redirect to the secure URL
+  if (file.cloudinary_url) {
+    return res.redirect(file.cloudinary_url);
+  }
+
+  // Legacy local file: stream from disk
   const filePath = path.join(uploadsDir, file.filename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: '文件已被删除' });
@@ -81,8 +77,8 @@ router.get('/:id/download', authenticateToken, (req, res) => {
   res.download(filePath, downloadName);
 });
 
-// POST /api/files/upload — upload file (admin only)
-router.post('/upload', authenticateToken, requireAdmin, upload.single('file'), (req, res) => {
+// POST /api/files/upload — upload file to Cloudinary (admin only)
+router.post('/upload', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: '请选择要上传的文件' });
   }
@@ -90,28 +86,48 @@ router.post('/upload', authenticateToken, requireAdmin, upload.single('file'), (
   const { displayName, description, category, subCategory } = req.body;
 
   if (!displayName || !category) {
-    // Clean up uploaded file if metadata missing
-    fs.unlinkSync(req.file.path);
     return res.status(400).json({ error: '请填写文件名称和分类' });
   }
 
-  const files = getFiles();
-  const newFile = {
-    id: String(Date.now()),
-    filename: req.file.filename,
-    displayName: displayName.trim(),
-    description: (description || '').trim(),
-    category: category.trim(),
-    subCategory: (subCategory && subCategory.trim()) || null,
-    originalName: Buffer.from(req.file.originalname, 'latin1').toString('utf-8'),
-    size: req.file.size,
-    uploadedAt: new Date().toISOString()
-  };
+  try {
+    // Upload file buffer to Cloudinary
+    const uploadResult = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { resource_type: 'auto' },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      stream.end(req.file.buffer);
+    });
 
-  files.push(newFile);
-  saveFiles(files);
+    const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf-8');
 
-  res.status(201).json(newFile);
+    const files = getFiles();
+    const newFile = {
+      id: String(Date.now()),
+      displayName: displayName.trim(),
+      description: (description || '').trim(),
+      category: category.trim(),
+      subCategory: (subCategory && subCategory.trim()) || null,
+      originalName: originalName,
+      size: req.file.size,
+      uploadedAt: new Date().toISOString(),
+      // Cloudinary fields
+      cloudinary_public_id: uploadResult.public_id,
+      cloudinary_url: uploadResult.secure_url,
+      cloudinary_resource_type: uploadResult.resource_type,
+    };
+
+    files.push(newFile);
+    saveFiles(files);
+
+    res.status(201).json(newFile);
+  } catch (err) {
+    console.error('Cloudinary upload error:', err);
+    res.status(500).json({ error: '文件上传到云存储失败，请稍后再试' });
+  }
 });
 
 // PUT /api/files/:id — rename file (admin only)
@@ -142,7 +158,7 @@ router.put('/:id', authenticateToken, requireAdmin, (req, res) => {
 });
 
 // DELETE /api/files/:id — delete file (admin only)
-router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
+router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   const files = getFiles();
   const index = files.findIndex(f => f.id === req.params.id);
 
@@ -152,10 +168,24 @@ router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
 
   const file = files[index];
 
-  // Delete physical file
-  const filePath = path.join(uploadsDir, file.filename);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
+  // Delete from Cloudinary if stored there
+  if (file.cloudinary_public_id) {
+    try {
+      await cloudinary.uploader.destroy(file.cloudinary_public_id, {
+        resource_type: file.cloudinary_resource_type || 'image',
+      });
+    } catch (err) {
+      console.error('Cloudinary delete error:', err);
+      // Continue with metadata deletion even if Cloudinary delete fails
+    }
+  }
+
+  // Delete local file if exists (legacy files)
+  if (file.filename) {
+    const filePath = path.join(uploadsDir, file.filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
   }
 
   // Remove from metadata
